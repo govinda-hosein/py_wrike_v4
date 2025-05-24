@@ -1,7 +1,14 @@
-from os import stat
 import requests
+import logging
+from urllib.parse import unquote
+from enum import Enum
 
 from .helpers import convert_list_to_dict, convert_list_to_string
+
+
+# Logging
+logging.getLogger(__name__).addHandler(logging.NullHandler())
+logger = logging.getLogger(__name__)
 
 
 class Wrike:
@@ -77,10 +84,14 @@ class Wrike:
 
     # region Base HTTP Methods
 
-    def get(self, path: str) -> dict:
+    def get(self, path: str, params: dict = None) -> dict:
         response = requests.get(
-            self.base_url + path, headers=self.__headers, verify=self.ssl_verify
+            self.base_url + path,
+            headers=self.__headers,
+            params=params,
+            verify=self.ssl_verify
         )
+        logger.debug(f"Actual requested URL: {unquote(response.url)}")
         return response.json()
 
     def post(self, path: str, body: dict) -> dict:
@@ -94,11 +105,40 @@ class Wrike:
 
     # endregion
 
+    # region ID conversion
+
+    class IdTypes(Enum):
+        """ Enumeration of API v2 endpoints """
+        ACCOUNT = "ApiV2Account"
+        USER = "ApiV2User"
+        FOLDER = "ApiV2Folder"
+        TASK = "ApiV2Task"
+        COMMENT = "ApiV2Comment"
+        ATTACHMENT = "ApiV2Attachment"
+        TIMELOG = "ApiV2Timelog"
+
+    def convert_to_id4s(self, id2s: list[str], idType: IdTypes) -> dict:
+        """ Convert from v2 to v4 ID format.
+
+        The Wrike API v4 requires queries with the v4 ID format. The Wrike
+        website reports in the v2 format, so a conversion is necessary.
+
+        The IdType must match the type of the v2 ID, or it won't find the
+        associated v4 ID. It's not a conversion, it's a lookup.
+        """
+        params = {
+            'type': idType.value,
+            'ids':  str(id2s)
+        }
+        return self.get("ids/", params)
+
+    # endregion
+
     # region Contacts
 
-    def query_contacts(self, ids: list) -> dict:
-        ids = convert_list_to_string(ids)
-        return self.get(f"contacts/{ids}")
+    def query_contacts(self, id4s: list) -> dict:
+        id4s = convert_list_to_string(id4s)
+        return self.get(f"contacts/{id4s}")
 
     def query_contacts_all(self) -> dict:
         return self.get("contacts")
@@ -110,9 +150,9 @@ class Wrike:
 
     # region Custom Fields
 
-    def query_custom_fields(self, ids: list) -> dict:
-        ids = convert_list_to_string(ids)
-        return self.get(f"customfields/{ids}")
+    def query_custom_fields(self, id4s: list) -> dict:
+        id4s = convert_list_to_string(id4s)
+        return self.get(f"customfields/{id4s}")
 
     def query_custom_fields_all(self) -> dict:
         return self.get("customfields")
@@ -151,9 +191,9 @@ class Wrike:
 
     # region Folders
 
-    def query_folders(self, ids: list) -> dict:
-        ids = convert_list_to_string(ids)
-        return self.get(f"folders/{ids}")
+    def query_folders(self, id4s: list) -> dict:
+        id4s = convert_list_to_string(id4s)
+        return self.get(f"folders/{id4s}")
 
     def query_folders_all(self) -> dict:
         return self.get("folders")
@@ -184,9 +224,9 @@ class Wrike:
 
     # region Tasks
 
-    def query_tasks(self, ids: list) -> dict:
-        ids = convert_list_to_string(ids)
-        return self.get(f"tasks/{ids}")
+    def query_tasks(self, id4s: list) -> dict:
+        id4s = convert_list_to_string(id4s)
+        return self.get(f"tasks/{id4s}")
 
     def query_tasks_all(self) -> dict:
         return self.get("tasks")
@@ -207,5 +247,44 @@ class Wrike:
 
     def query_workflows(self) -> dict:
         return self.get("workflows")
+
+    # endregion
+
+    # region Timelogs
+
+    def query_timelogs(self,
+                       location: str = "",
+                       tracked_date: list[str] = []
+                      ) -> dict:
+        """ Get the timelogs from an optional location and tracked date range.
+
+        This method always uses descendants = True, so that it recursively
+        retrieves timelogs from subtasks and subfolders.
+
+        Args:
+            location: API endpoint location, such as for a folder or a task (e.g. "tasks/{task_id}")
+            tracked_date: Optional list of date strings for tracked date filter
+                         Format: [start_date] or [start_date, end_date] or [equal_date]
+                         Date format: yyyy-MM-dd'T'HH:mm:ss ('T'HH:mm:ss is optional)
+
+        Returns:
+            dict: API response containing timelog data
+        """
+        params = {
+                'descendants': 'true'
+                }
+
+        if tracked_date:
+            if len(tracked_date) == 1:
+                # Single date - treat as exact match
+                params['trackedDate'] = str({'equal': tracked_date[0]})
+            elif len(tracked_date) == 2:
+                # Date range
+                params['trackedDate'] = str({
+                    'start': tracked_date[0],
+                    'end': tracked_date[1]
+                })
+
+        return self.get(f"{location}/timelogs", params)
 
     # endregion
